@@ -197,101 +197,49 @@ class {$moduleName}Controller extends BaseController
 
     private function generateRepositoryContent(string $moduleName): string
     {
-        $modelName = strtolower($moduleName);
-
         return "<?php
 
 namespace App\\Modules\\$moduleName\\Adapters\\Repositories;
 
-use App\\Models\\$moduleName as {$moduleName}Model;
 use App\\Core\\Repositories\\BaseRepository;
+use App\\Models\\$moduleName as {$moduleName}Model;
 use App\\Modules\\$moduleName\\Domain\\Contracts\\{$moduleName}RepositoryPort;
-use App\\Modules\\$moduleName\\Domain\\Entities\\$moduleName;
-use Illuminate\\Contracts\\Pagination\\LengthAwarePaginator;
 use Spatie\\QueryBuilder\\AllowedFilter;
 use Spatie\\QueryBuilder\\AllowedSort;
-use Spatie\\QueryBuilder\\AllowedInclude;
 
+/** @extends BaseRepository<{$moduleName}Model> */
 class {$moduleName}Repository extends BaseRepository implements {$moduleName}RepositoryPort
 {
     public function __construct()
     {
-        parent::__construct(new {$moduleName}Model());
+        parent::__construct({$moduleName}Model::class);
     }
 
-    /**
-     * Setup {$moduleName}-specific filters, sorts and includes
-     * Customize this method to define what can be filtered, sorted, and included
-     */
-    protected function setupDefaults()
+    protected function getFilters(): array
     {
-        // Define allowed filters for {$moduleName}
-        \$this->allowedFilters = [
+        return [
             AllowedFilter::exact('id'),
-            AllowedFilter::partial('name'), // Example: partial search on name
+            AllowedFilter::partial('name'),
             AllowedFilter::exact('status'),
             AllowedFilter::exact('created_at'),
             AllowedFilter::exact('updated_at'),
-            // Add more filters as needed:
-            // AllowedFilter::exact('user_id'),
-            // AllowedFilter::scope('created_after'), // Requires scope in model
-            // AllowedFilter::scope('active'), // Requires scope in model
         ];
+    }
 
-        // Define allowed sorts for {$moduleName}
-        \$this->allowedSorts = [
+    protected function getSorts(): array
+    {
+        return [
             AllowedSort::field('id'),
             AllowedSort::field('name'),
             AllowedSort::field('status'),
             AllowedSort::field('created_at'),
             AllowedSort::field('updated_at'),
-            // Add more sorts as needed:
-            // AllowedSort::field('user_id'),
         ];
-
-        // Define allowed includes (relationships) for {$moduleName}
-        \$this->allowedIncludes = [
-            // Add relationships that can be included:
-            // AllowedInclude::relationship('user'),
-            // AllowedInclude::relationship('category'),
-        ];
-
-        // Set default sort
-        \$this->defaultSort = '-created_at';
     }
 
-    public function getAll(int \$perPage, ?string \$defaultSort = null, array \$with = []): LengthAwarePaginator
+    protected function getWith(): array
     {
-        // Spatie Query Builder will automatically handle:
-        // - Filtering: GET /{$modelName}s?filter[name]=example&filter[status]=active
-        // - Sorting: GET /{$modelName}s?sort=-created_at,name
-        // - Including: GET /{$modelName}s?include=user,category
-        // - Combining: GET /{$modelName}s?filter[status]=active&sort=-created_at&include=user
-
-        return parent::getAll(\$perPage, \$defaultSort, \$with);
-    }
-
-    public function create(array \$data)
-    {
-        // Add any specific logic before creation
-        // \$data['user_id'] = auth()->id(); // Example: Set current user
-
-        \${$modelName} = {$moduleName}Model::create(\$data);
-
-        // Load relationships if needed
-        // \${$modelName}->load(['user', 'category']);
-
-        return new $moduleName(\${$modelName}->toArray());
-    }
-
-    public function findById(\$id)
-    {
-        \${$modelName} = {$moduleName}Model::findOrFail(\$id);
-
-        // Load relationships if needed
-        // \${$modelName}->load(['user', 'category']);
-
-        return new $moduleName(\${$modelName}->toArray());
+        return [];
     }
 }";
     }

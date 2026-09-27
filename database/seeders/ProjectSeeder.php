@@ -44,7 +44,7 @@ class ProjectSeeder extends Seeder
 
             $this->assignTeam($project, $users);
 
-            if ($definition['milestones']) {
+            if (! empty($definition['milestones'])) {
                 $this->createMilestones($project, $definition['milestones']);
             }
 

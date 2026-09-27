@@ -52,6 +52,7 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
     Route::get('registered-businesses', [RegisteredBusinessController::class, 'index'])->name('registered-businesses.index');
 
     Route::get('sector-map', [SectorMapController::class, 'index'])->name('sector-map.index');
+    Route::get('business-categories', [SectorMapController::class, 'categories'])->name('business-categories.index');
     Route::get('sector-map/businesses', [SectorMapController::class, 'businesses'])->name('sector-map.businesses');
     Route::get('sector-map/places', [SectorMapController::class, 'places'])->name('sector-map.places');
     Route::post('sector-map/businesses', [SectorMapController::class, 'store'])->name('sector-map.store');

@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Municipality;
-use App\Models\Province;
+use App\Modules\Municipality\Domain\Services\ManageMunicipalitiesService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -12,35 +12,14 @@ use Inertia\Response;
 
 class MunicipalityController extends Controller
 {
+    public function __construct(private readonly ManageMunicipalitiesService $service) {}
+
     public function index(Request $request): Response
     {
-        $query = Municipality::query()
-            ->withTrashed()
-            ->with(['province' => fn ($q) => $q->withTrashed()]);
-
-        if ($search = $request->input('search')) {
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('domain', 'like', "%{$search}%")
-                    ->orWhere('subdomain', 'like', "%{$search}%");
-            });
-        }
-
         $status = $request->input('status', 'active');
-        if ($status === 'active') {
-            $query->whereNull('deleted_at');
-        } elseif ($status === 'inactive') {
-            $query->whereNotNull('deleted_at');
-        }
-
-        $municipalities = $query->orderBy('id', 'desc')->paginate(15)->withQueryString();
 
         return Inertia::render('admin/municipalities', [
-            'municipalities' => $municipalities,
-            'provinces' => Province::query()
-                ->whereNull('deleted_at')
-                ->orderBy('name')
-                ->get(['id', 'name']),
+            ...$this->service->index($request->input('search'), $status),
             'filters' => $request->only(['search', 'status']),
         ]);
     }
@@ -58,7 +37,7 @@ class MunicipalityController extends Controller
             'contracted_plan' => ['nullable', 'string', 'max:255'],
         ]);
 
-        Municipality::create($validated);
+        $this->service->create($validated);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => __('Municipio creado.')]);
 
@@ -78,7 +57,7 @@ class MunicipalityController extends Controller
             'contracted_plan' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $municipality->update($validated);
+        $this->service->update($municipality, $validated);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => __('Municipio actualizado.')]);
 
@@ -87,7 +66,7 @@ class MunicipalityController extends Controller
 
     public function destroy(Municipality $municipality): RedirectResponse
     {
-        $municipality->delete();
+        $this->service->delete($municipality);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => __('Municipio desactivado.')]);
 

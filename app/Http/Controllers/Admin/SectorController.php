@@ -3,8 +3,8 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\Municipality;
 use App\Models\Sector;
+use App\Modules\Sector\Domain\Services\ManageSectorsService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -12,31 +12,14 @@ use Inertia\Response;
 
 class SectorController extends Controller
 {
+    public function __construct(private readonly ManageSectorsService $service) {}
+
     public function index(Request $request): Response
     {
-        $query = Sector::query()
-            ->withTrashed()
-            ->with(['municipality' => fn ($q) => $q->withTrashed()]);
-
-        if ($search = $request->input('search')) {
-            $query->where('name', 'like', "%{$search}%");
-        }
-
         $status = $request->input('status', 'active');
-        if ($status === 'active') {
-            $query->whereNull('deleted_at');
-        } elseif ($status === 'inactive') {
-            $query->whereNotNull('deleted_at');
-        }
-
-        $sectors = $query->orderBy('id', 'desc')->paginate(15)->withQueryString();
 
         return Inertia::render('admin/sectors', [
-            'sectors' => $sectors,
-            'municipalities' => Municipality::query()
-                ->whereNull('deleted_at')
-                ->orderBy('name')
-                ->get(['id', 'name']),
+            ...$this->service->index($request->input('search'), $status),
             'filters' => $request->only(['search', 'status']),
         ]);
     }
@@ -55,7 +38,7 @@ class SectorController extends Controller
             unset($validated['geojson_polygon']);
         }
 
-        Sector::create($validated);
+        $this->service->create($validated);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => __('Sector creado.')]);
 
@@ -76,7 +59,7 @@ class SectorController extends Controller
             $validated['geojson_polygon'] = null;
         }
 
-        $sector->update($validated);
+        $this->service->update($sector, $validated);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => __('Sector actualizado.')]);
 
@@ -85,7 +68,7 @@ class SectorController extends Controller
 
     public function destroy(Sector $sector): RedirectResponse
     {
-        $sector->delete();
+        $this->service->delete($sector);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => __('Sector desactivado.')]);
 

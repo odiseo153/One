@@ -2,7 +2,6 @@
 
 namespace App\Modules\Project\Domain\Services;
 
-use App\Models\ProjectMilestone;
 use App\Modules\Project\Adapters\Repositories\ProjectRepository;
 
 class UpdateMilestoneStatusService
@@ -15,17 +14,6 @@ class UpdateMilestoneStatusService
     {
         $project = $this->repository->findById($projectId);
 
-        $milestone = ProjectMilestone::query()
-            ->where('project_id', $project->id)
-            ->findOrFail($milestoneId);
-
-        if ($status === ProjectMilestone::STATUS_COMPLETED) {
-            $milestone->markCompleted();
-        } else {
-            $milestone->update([
-                'status' => $status,
-                'completed_date' => null,
-            ]);
-        }
+        $this->repository->updateMilestoneStatus($project->id, $milestoneId, $status);
     }
 }

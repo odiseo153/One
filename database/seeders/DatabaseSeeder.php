@@ -17,6 +17,7 @@ class DatabaseSeeder extends Seeder
             ProvinceSeeder::class,
             MunicipalitySeeder::class,
             SectorSeeder::class,
+            BusinessCategorySeeder::class,
             UserSeeder::class,
             ComplaintSeeder::class,
             ProjectSeeder::class,

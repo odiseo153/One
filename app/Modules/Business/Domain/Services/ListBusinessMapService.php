@@ -3,7 +3,6 @@
 namespace App\Modules\Business\Domain\Services;
 
 use App\Models\Business;
-use App\Models\Municipality;
 use App\Modules\Business\Adapters\Repositories\BusinessRepository;
 use App\Modules\Municipality\Adapters\Repositories\MunicipalityRepository;
 use App\Modules\Province\Adapters\Repositories\ProvinceRepository;
@@ -33,9 +32,7 @@ class ListBusinessMapService
         $businesses = $this->businessRepository->getForMap($effectiveMunicipalityId, $provinceFilter);
 
         return [
-            'municipality' => $effectiveMunicipalityId
-                ? Municipality::query()->find($effectiveMunicipalityId, ['id', 'name'])
-                : null,
+            'municipality' => $this->municipalityRepository->findOption($effectiveMunicipalityId),
             'provinces' => $this->provinceRepository->getActiveOptions(),
             'municipalities' => $this->municipalityRepository->getActiveOptions($provinceFilter),
             'sectors' => $this->sectorRepository->getForMap(

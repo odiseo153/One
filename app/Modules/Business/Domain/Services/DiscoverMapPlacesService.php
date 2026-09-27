@@ -3,14 +3,17 @@
 namespace App\Modules\Business\Domain\Services;
 
 use App\Models\Business;
-use App\Models\Sector;
+use App\Modules\Business\Adapters\Repositories\BusinessRepository;
 use App\Modules\Business\Adapters\Repositories\SerpApiMapsRepository;
+use App\Modules\Sector\Adapters\Repositories\SectorRepository;
 use Illuminate\Support\Collection;
 
 class DiscoverMapPlacesService
 {
     public function __construct(
         private readonly SerpApiMapsRepository $serpApiMapsRepository,
+        private readonly BusinessRepository $businessRepository,
+        private readonly SectorRepository $sectorRepository,
     ) {}
 
     /**
@@ -30,7 +33,7 @@ class DiscoverMapPlacesService
 
         if ($userSectorId) {
             $sectorId = $userSectorId;
-            $municipalityId = Sector::query()->where('id', $userSectorId)->value('municipality_id');
+            $municipalityId = $this->sectorRepository->municipalityId($userSectorId);
         }
 
         $payload = $this->serpApiMapsRepository->search($latitude, $longitude, $query);
@@ -56,7 +59,7 @@ class DiscoverMapPlacesService
             return $municipalityId;
         }
 
-        return Sector::query()->where('id', $sectorId)->value('municipality_id') ?: $municipalityId;
+        return $this->sectorRepository->municipalityId($sectorId) ?: $municipalityId;
     }
 
     /**
@@ -64,15 +67,7 @@ class DiscoverMapPlacesService
      */
     private function businessesForMatching(?int $municipalityId, ?int $sectorId): Collection
     {
-        $query = Business::query()->with('sector:id,name');
-
-        if ($sectorId) {
-            $query->where('sector_id', $sectorId);
-        } elseif ($municipalityId) {
-            $query->where('municipality_id', $municipalityId);
-        }
-
-        return $query->get();
+        return $this->businessRepository->getForMatching($municipalityId, $sectorId);
     }
 
     /**

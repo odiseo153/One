@@ -3,53 +3,23 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\Municipality;
-use App\Models\Sector;
 use App\Models\User;
+use App\Modules\User\Domain\Services\ManageUsersService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class UserController extends Controller
 {
+    public function __construct(private readonly ManageUsersService $service) {}
+
     public function index(Request $request): Response
     {
-        $query = User::query()
-            ->withTrashed()
-            ->with([
-                'municipality' => fn ($q) => $q->withTrashed(),
-                'sector' => fn ($q) => $q->withTrashed(),
-            ]);
-
-        if ($search = $request->input('search')) {
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('email', 'like', "%{$search}%")
-                    ->orWhere('phone', 'like', "%{$search}%");
-            });
-        }
-
         $status = $request->input('status', 'active');
-        if ($status === 'active') {
-            $query->whereNull('deleted_at');
-        } elseif ($status === 'inactive') {
-            $query->whereNotNull('deleted_at');
-        }
-
-        $users = $query->orderBy('id', 'desc')->paginate(15)->withQueryString();
 
         return Inertia::render('admin/users', [
-            'users' => $users,
-            'municipalities' => Municipality::query()
-                ->whereNull('deleted_at')
-                ->orderBy('name')
-                ->get(['id', 'name']),
-            'sectors' => Sector::query()
-                ->whereNull('deleted_at')
-                ->orderBy('name')
-                ->get(['id', 'municipality_id', 'name']),
+            ...$this->service->index($request->input('search'), $status),
             'filters' => $request->only(['search', 'status']),
         ]);
     }
@@ -66,9 +36,7 @@ class UserController extends Controller
             'status' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $validated['password'] = Hash::make($validated['password']);
-
-        User::create($validated);
+        $this->service->create($validated);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => __('Usuario creado.')]);
 
@@ -87,13 +55,7 @@ class UserController extends Controller
             'status' => ['nullable', 'string', 'max:255'],
         ]);
 
-        if (empty($validated['password'])) {
-            unset($validated['password']);
-        } else {
-            $validated['password'] = Hash::make($validated['password']);
-        }
-
-        $user->update($validated);
+        $this->service->update($user, $validated);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => __('Usuario actualizado.')]);
 
@@ -102,7 +64,7 @@ class UserController extends Controller
 
     public function destroy(User $user): RedirectResponse
     {
-        $user->delete();
+        $this->service->delete($user);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => __('Usuario desactivado.')]);
 

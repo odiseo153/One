@@ -3,79 +3,63 @@
 namespace App\Modules\Sector\Adapters\Repositories;
 
 use App\Core\Repositories\BaseRepository;
+use App\Core\Support\EntitySearchHelper;
+use App\Models\Municipality;
 use App\Models\Sector as SectorModel;
 use App\Modules\Sector\Domain\Contracts\SectorRepositoryPort;
-use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Spatie\QueryBuilder\AllowedFilter;
-use Spatie\QueryBuilder\AllowedInclude;
 use Spatie\QueryBuilder\AllowedSort;
 
+/** @extends BaseRepository<SectorModel> */
 class SectorRepository extends BaseRepository implements SectorRepositoryPort
 {
     public function __construct()
     {
-        parent::__construct(new SectorModel);
+        parent::__construct(SectorModel::class);
     }
 
     /**
      * Setup Sector-specific filters, sorts and includes
      * Customize this method to define what can be filtered, sorted, and included
      */
-    protected function setupDefaults(): void
+    protected function getFilters(): array
     {
-        $this->allowedFilters = [
+        return [
             AllowedFilter::exact('id'),
             AllowedFilter::partial('name'),
+            AllowedFilter::callback('search', fn ($query, $value) => EntitySearchHelper::apply(
+                $query,
+                $value,
+                ['columns' => ['name']],
+            )),
+            AllowedFilter::callback('status', function ($query, mixed $value): void {
+                $value === 'inactive' ? $query->whereNotNull('deleted_at') : $query->whereNull('deleted_at');
+            }),
             AllowedFilter::exact('municipality_id'),
+            AllowedFilter::callback('province_id', fn ($query, $value) => $query->whereHas(
+                'municipality',
+                fn ($municipality) => $municipality->where('province_id', $value),
+            )),
             AllowedFilter::exact('created_at'),
             AllowedFilter::exact('updated_at'),
         ];
+    }
 
-        $this->allowedSorts = [
+    protected function getSorts(): array
+    {
+        return [
             AllowedSort::field('id'),
             AllowedSort::field('name'),
             AllowedSort::field('municipality_id'),
             AllowedSort::field('created_at'),
             AllowedSort::field('updated_at'),
         ];
-
-        $this->allowedIncludes = [
-            AllowedInclude::relationship('municipality'),
-        ];
-
-        $this->defaultSort = '-created_at';
     }
 
-    /**
-     * @param  array<int, string>  $with
-     * @return LengthAwarePaginator<int, SectorModel>
-     */
-    public function getAll(int $perPage, ?string $defaultSort = null, array $with = []): LengthAwarePaginator
+    protected function getWith(): array
     {
-        // Spatie Query Builder will automatically handle:
-        // - Filtering: GET /sectors?filter[name]=example&filter[status]=active
-        // - Sorting: GET /sectors?sort=-created_at,name
-        // - Including: GET /sectors?include=user,category
-        // - Combining: GET /sectors?filter[status]=active&sort=-created_at&include=user
-
-        return parent::getAll($perPage, $defaultSort, $with);
-    }
-
-    /**
-     * @param  array<string, mixed>  $data
-     */
-    public function create(array $data): SectorModel
-    {
-        return SectorModel::create($data)->load($this->includeNames());
-    }
-
-    /**
-     * @param  int|string  $id
-     */
-    public function findById($id): SectorModel
-    {
-        return SectorModel::with($this->includeNames())->findOrFail($id);
+        return ['municipality'];
     }
 
     /**
@@ -86,17 +70,13 @@ class SectorRepository extends BaseRepository implements SectorRepositoryPort
         bool $fallbackToAll = false,
         ?int $provinceId = null,
     ): EloquentCollection {
-        $query = SectorModel::query()
+        $sectors = $this->query(array_filter([
+            'municipality_id' => $municipalityId,
+            'province_id' => $municipalityId ? null : $provinceId,
+        ], fn (mixed $value): bool => $value !== null))
             ->whereNull('deleted_at')
-            ->orderBy('name');
-
-        if ($municipalityId) {
-            $query->where('municipality_id', $municipalityId);
-        } elseif ($provinceId) {
-            $query->whereHas('municipality', fn ($municipality) => $municipality->where('province_id', $provinceId));
-        }
-
-        $sectors = $query->get(['id', 'municipality_id', 'name', 'geojson_polygon']);
+            ->orderBy('name')
+            ->get(['id', 'municipality_id', 'name', 'geojson_polygon']);
 
         if (! $fallbackToAll || $sectors->isNotEmpty() || ! $municipalityId) {
             return $sectors;
@@ -106,5 +86,41 @@ class SectorRepository extends BaseRepository implements SectorRepositoryPort
             ->whereNull('deleted_at')
             ->orderBy('name')
             ->get(['id', 'municipality_id', 'name', 'geojson_polygon']);
+    }
+
+    public function getManagementData(?string $search, string $status): array
+    {
+        return [
+            'sectors' => $this->getAll(
+                15,
+                '-id',
+                ['municipality' => fn ($query) => $query->withTrashed()],
+                compact('search', 'status'),
+            ),
+            'municipalities' => Municipality::query()->whereNull('deleted_at')->orderBy('name')->get(['id', 'name']),
+        ];
+    }
+
+    public function municipalityId(int $sectorId): ?int
+    {
+        $municipalityId = SectorModel::query()->where('id', $sectorId)->value('municipality_id');
+
+        return $municipalityId ? (int) $municipalityId : null;
+    }
+
+    public function municipalityHasSectors(int $municipalityId): bool
+    {
+        return SectorModel::query()
+            ->where('municipality_id', $municipalityId)
+            ->whereNull('deleted_at')
+            ->exists();
+    }
+
+    public function belongsToMunicipality(int $sectorId, int $municipalityId): bool
+    {
+        return SectorModel::query()
+            ->where('id', $sectorId)
+            ->where('municipality_id', $municipalityId)
+            ->exists();
     }
 }

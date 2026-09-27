@@ -3,205 +3,227 @@
 namespace App\Core\Repositories;
 
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\SoftDeletingScope;
+use Illuminate\Http\Request;
 use Spatie\QueryBuilder\AllowedFilter;
 use Spatie\QueryBuilder\AllowedSort;
 use Spatie\QueryBuilder\QueryBuilder;
 
-class BaseRepository
+/** @template TModel of Model */
+class BaseRepository implements BaseRepositoryPort
 {
-    protected $model;
+    protected string $defaultSort = '-created_at';
 
-    protected $allowedFilters = [];
+    /** @var class-string<TModel> */
+    protected string $modelClass;
 
-    protected $allowedSorts = [];
-
-    protected $allowedIncludes = [];
-
-    protected $allowedCounts = [];
-
-    protected $defaultSort = '-created_at';
-
-    /** @var class-string|null Clase de la entidad del módulo (ej: User::class) */
-    protected $entityClass = null;
-
-    public function __construct(Model $modelClass)
+    /** @param class-string<TModel> $modelClass */
+    public function __construct(string $modelClass)
     {
-        $this->model = $modelClass;
-        $this->setupDefaults();
+        $this->modelClass = $modelClass;
     }
 
     /**
-     * Setup default filters, sorts and includes
-     * Override this method in child repositories to customize
+     * @param  array<string, mixed>  $data
+     * @return TModel
      */
-    protected function setupDefaults()
+    public function create(array $data): mixed
     {
-        $this->allowedFilters = [
-            AllowedFilter::exact('id'),
-            AllowedFilter::partial('name'),
-            AllowedFilter::exact('status'),
-            AllowedFilter::exact('created_at'),
-            AllowedFilter::exact('updated_at'),
-        ];
-
-        $this->allowedSorts = [
-            AllowedSort::field('id'),
-            AllowedSort::field('name'),
-            AllowedSort::field('status'),
-            AllowedSort::field('created_at'),
-            AllowedSort::field('updated_at'),
-        ];
-
-        $this->allowedIncludes = [];
-    }
-
-    /**
-     * Hook que se ejecuta después de crear un modelo.
-     * Los repositorios hijos pueden sobrescribirlo para lógica extra.
-     */
-    protected function afterCreate(Model $model, array $data): void
-    {
-        // Override in child classes if needed
-    }
-
-    /**
-     * Hook que se ejecuta después de actualizar un modelo.
-     */
-    protected function afterUpdate(Model $model, array $data): void
-    {
-        // Override in child classes if needed
-    }
-
-    /**
-     * Convierte un modelo Eloquent a la entidad del módulo si está configurada.
-     */
-    protected function toEntity(?Model $model): mixed
-    {
-        if ($model === null) {
-            return null;
-        }
-
-        if ($this->entityClass) {
-            return new $this->entityClass($model->toArray());
-        }
+        $model = $this->modelQuery()->create($data);
+        $model->load($this->getWith());
+        $this->afterCreate($model, $data);
 
         return $model;
     }
 
-    /**
-     * Busca el modelo Eloquent por ID (interno, siempre devuelve el modelo).
-     */
-    protected function findModelById($id): Model
+    /** @return TModel */
+    public function findById(int|string $id): mixed
     {
-        $query = $this->model->newQuery();
-
-        if (! empty($this->allowedIncludes)) {
-            $query->with($this->includeNames());
-        }
-
-        return $query->findOrFail($id);
+        return $this->findModelById($id);
     }
 
+    /** @param array<string, mixed> $data */
+    /** @return TModel */
+    public function update(int|string $id, array $data): mixed
+    {
+        $model = $this->findModelById($id);
+        $model->update($data);
+        $model->refresh()->load($this->getWith());
+        $this->afterUpdate($model, $data);
+
+        return $model;
+    }
+
+    public function delete(int|string $id): bool
+    {
+        return (bool) $this->findModelById($id)->delete();
+    }
+
+    public function restore(int|string $id): bool
+    {
+        if (! $this->usesSoftDeletes()) {
+            return false;
+        }
+
+        $model = $this->modelQuery()
+            ->withoutGlobalScope(SoftDeletingScope::class)
+            ->findOrFail($id);
+
+        $restore = [$model, 'restore'];
+
+        return is_callable($restore) && (bool) $restore();
+    }
+
+    public function forceDelete(int|string $id): bool
+    {
+        $query = $this->modelQuery();
+
+        if ($this->usesSoftDeletes()) {
+            $query->withoutGlobalScope(SoftDeletingScope::class);
+        }
+
+        $model = $query->findOrFail($id);
+
+        if (! $this->usesSoftDeletes()) {
+            return (bool) $model->delete();
+        }
+
+        $forceDelete = [$model, 'forceDelete'];
+
+        return (bool) $forceDelete();
+    }
+
+    /**
+     * @param  array<int|string, mixed>  $with
+     * @param  array<string, mixed>  $parameters
+     * @return LengthAwarePaginator<int, TModel>
+     */
     public function getAll(
-        int $perPage,
+        int $perPage = 15,
         ?string $defaultSort = null,
         array $with = [],
+        array $parameters = [],
     ): LengthAwarePaginator {
-        $perPage = max(1, min($perPage, 1000));
-
-        $query = QueryBuilder::for($this->model->query())
-            ->withTrashed()
-            ->allowedFilters(...$this->allowedFilters)
-            ->allowedSorts(...$this->allowedSorts)
-            ->allowedIncludes(...$this->allowedIncludes)
-            ->withCount($this->allowedCounts)
+        $query = $this->query($parameters)
             ->defaultSort($defaultSort ?? $this->defaultSort);
 
-        if (! empty($with)) {
+        if ($with !== []) {
             $query->with($with);
-        } elseif (! empty($this->allowedIncludes)) {
-            $query->with($this->includeNames());
         }
 
-        $paginator = $query->paginate($perPage);
-
-        // Si hay entidad configurada, transforma cada item a la entidad del módulo
-        if ($this->entityClass) {
-            $entityClass = $this->entityClass;
-            $paginator
-                ->getCollection()
-                ->transform(function ($model) use ($entityClass) {
-                    return new $entityClass($model->toArray());
-                });
-        }
+        $paginator = $query
+            ->paginate(max(1, min($perPage, 100)))
+            ->withQueryString();
 
         return $paginator;
     }
 
-    public function query(): QueryBuilder
+    /**
+     * @param  array<string, mixed>  $parameters
+     * @return QueryBuilder<TModel>
+     */
+    public function query(array $parameters = []): QueryBuilder
     {
-        return QueryBuilder::for($this->model->newQuery())
-            ->allowedFilters(...$this->allowedFilters)
-            ->allowedSorts(...$this->allowedSorts)
-            ->allowedIncludes(...$this->allowedIncludes)
-            ->defaultSort($this->defaultSort);
+        $query = $this->modelQuery();
+
+        if ($this->usesSoftDeletes()) {
+            $query->withoutGlobalScope(SoftDeletingScope::class);
+        }
+
+        $builder = QueryBuilder::for($query, $this->queryRequest($parameters));
+        $builder->allowedFilters(...$this->getFilters());
+        $builder->allowedSorts(...$this->getSorts());
+        $builder->allowedIncludes(...$this->getWith());
+        $builder->with($this->getWith());
+        $builder->withCount($this->getCounts());
+
+        return $builder;
     }
 
-    public function create(array $data)
+    /** @return array<int, AllowedFilter|string> */
+    protected function getFilters(): array
     {
-        $model = $this->model->create($data);
-
-        $this->afterCreate($model, $data);
-
-        return $this->toEntity($model);
+        return [];
     }
 
-    public function findById($id)
+    /** @return array<int, AllowedSort|string> */
+    protected function getSorts(): array
     {
-        $model = $this->findModelById($id);
-
-        return $this->toEntity($model);
+        return [
+            AllowedSort::field('id'),
+            AllowedSort::field('created_at'),
+            AllowedSort::field('updated_at'),
+            AllowedSort::field('deleted_at'),
+        ];
     }
 
-    public function update($id, array $data)
+    /** @return array<int, string> */
+    protected function getWith(): array
     {
-        $model = $this->findModelById($id);
-        $model->update($data);
-        $model->refresh();
-
-        $this->afterUpdate($model, $data);
-
-        return $this->toEntity($model);
+        return [];
     }
 
-    public function delete($id)
+    /** @return array<int, string> */
+    protected function getCounts(): array
     {
-        $model = $this->findModelById($id);
-
-        return $model->delete();
+        return [];
     }
 
-    public function getAllowedFilters(): array
+    /** @param array<string, mixed> $data */
+    protected function afterCreate(Model $model, array $data): void {}
+
+    /** @param array<string, mixed> $data */
+    protected function afterUpdate(Model $model, array $data): void {}
+
+    /** @return TModel */
+    protected function findModelById(int|string $id): Model
     {
-        return $this->allowedFilters;
+        return $this->modelQuery()
+            ->with($this->getWith())
+            ->findOrFail($id);
     }
 
-    public function getAllowedSorts(): array
+    /** @return Builder<TModel> */
+    private function modelQuery(): Builder
     {
-        return $this->allowedSorts;
+        return $this->modelClass::query();
     }
 
-    public function getAllowedIncludes(): array
+    /** @param array<string, mixed> $parameters */
+    private function queryRequest(array $parameters): Request
     {
-        return $this->allowedIncludes;
+        $parameters = $parameters !== [] ? $parameters : request()->query();
+        $filters = is_array($parameters['filter'] ?? null)
+            ? $parameters['filter']
+            : [];
+
+        foreach ($this->filterNames() as $filter) {
+            if (array_key_exists($filter, $parameters) && ! array_key_exists($filter, $filters)) {
+                $filters[$filter] = $parameters[$filter];
+            }
+        }
+
+        $parameters['filter'] = $filters;
+
+        return Request::create('/', 'GET', $parameters);
     }
 
-    protected function includeNames(): array
+    /** @return array<int, string> */
+    private function filterNames(): array
     {
         return array_map(
-            fn ($include) => $include->getName(),
-            $this->allowedIncludes,
+            fn (AllowedFilter|string $filter): string => $filter instanceof AllowedFilter
+                ? $filter->getName()
+                : $filter,
+            $this->getFilters(),
         );
+    }
+
+    private function usesSoftDeletes(): bool
+    {
+        return in_array(SoftDeletes::class, class_uses_recursive($this->modelClass), true);
     }
 }

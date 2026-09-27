@@ -6,13 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Models\Project;
 use App\Models\ProjectMilestone;
 use App\Models\ProjectUser;
-use App\Modules\Project\Adapters\Repositories\ProjectRepository;
 use App\Modules\Project\Domain\Services\CreateProjectService;
 use App\Modules\Project\Domain\Services\DeleteProjectService;
 use App\Modules\Project\Domain\Services\DestroyAssignmentService;
 use App\Modules\Project\Domain\Services\DestroyMilestoneService;
 use App\Modules\Project\Domain\Services\FindByIdProjectService;
 use App\Modules\Project\Domain\Services\ListProjectsService;
+use App\Modules\Project\Domain\Services\ProjectViewService;
 use App\Modules\Project\Domain\Services\StoreAssignmentService;
 use App\Modules\Project\Domain\Services\StoreMilestoneService;
 use App\Modules\Project\Domain\Services\StoreUpdateService;
@@ -41,6 +41,7 @@ class ProjectController extends Controller
         private readonly StoreMilestoneService $storeMilestoneService,
         private readonly UpdateMilestoneStatusService $updateMilestoneStatusService,
         private readonly DestroyMilestoneService $destroyMilestoneService,
+        private readonly ProjectViewService $viewService,
     ) {}
 
     public function index(Request $request): Response
@@ -49,14 +50,12 @@ class ProjectController extends Controller
 
         $projects = $this->listService->execute(12);
 
-        $repository = app(ProjectRepository::class);
-
         return Inertia::render('admin/projects/index', [
             'projects' => $projects,
-            'sectors' => $repository->getSectorOptions($municipalityId),
-            'types' => $repository->getTypeOptions(),
-            'statuses' => $repository->getStatusOptions(),
-            'municipalities' => $repository->getMunicipalityOptions($request->user()?->municipality_id),
+            'sectors' => $this->viewService->sectorOptions($municipalityId),
+            'types' => $this->viewService->typeOptions(),
+            'statuses' => $this->viewService->statusOptions(),
+            'municipalities' => $this->viewService->municipalityOptions($request->user()?->municipality_id),
             'filters' => $request->only([
                 'search',
                 'type',
@@ -66,21 +65,20 @@ class ProjectController extends Controller
                 'to',
                 'municipality_id',
             ]),
-            'stats' => $repository->getStats($municipalityId),
+            'stats' => $this->viewService->stats($municipalityId),
         ]);
     }
 
     public function create(Request $request): Response
     {
         $municipalityId = $this->resolveMunicipalityId($request);
-        $repository = app(ProjectRepository::class);
 
         return Inertia::render('admin/projects/create', [
-            'municipalities' => $repository->getMunicipalityOptions($request->user()?->municipality_id),
-            'defaultMunicipality' => $repository->getMunicipality($municipalityId),
-            'sectors' => $repository->getAllSectorOptions(),
-            'types' => $repository->getTypeOptions(),
-            'statuses' => $repository->getStatusOptions(),
+            'municipalities' => $this->viewService->municipalityOptions($request->user()?->municipality_id),
+            'defaultMunicipality' => $this->viewService->municipality($municipalityId),
+            'sectors' => $this->viewService->allSectorOptions(),
+            'types' => $this->viewService->typeOptions(),
+            'statuses' => $this->viewService->statusOptions(),
         ]);
     }
 
@@ -108,15 +106,14 @@ class ProjectController extends Controller
         $project = $this->findByIdService->execute($project);
 
         $municipalityId = $this->resolveMunicipalityId($request);
-        $repository = app(ProjectRepository::class);
 
         return Inertia::render('admin/projects/show', [
             'project' => $project,
-            'users' => $repository->getUserOptions($municipalityId),
-            'roles' => $repository->getRoleOptions(),
-            'statuses' => $repository->getStatusOptions(),
-            'municipalities' => $repository->getMunicipalityOptions($request->user()?->municipality_id),
-            'map' => $repository->getForMap($municipalityId ?? $project->municipality_id),
+            'users' => $this->viewService->userOptions($municipalityId),
+            'roles' => $this->viewService->roleOptions(),
+            'statuses' => $this->viewService->statusOptions(),
+            'municipalities' => $this->viewService->municipalityOptions($request->user()?->municipality_id),
+            'map' => $this->viewService->map($municipalityId ?? $project->municipality_id),
         ]);
     }
 
@@ -124,17 +121,16 @@ class ProjectController extends Controller
     {
         $project = $this->findByIdService->execute($project);
         $municipalityId = $this->resolveMunicipalityId($request);
-        $repository = app(ProjectRepository::class);
 
         return Inertia::render('admin/projects/edit', [
             'project' => $project,
-            'municipalities' => $repository->getMunicipalityOptions($request->user()?->municipality_id),
-            'defaultMunicipality' => $repository->getMunicipality(
+            'municipalities' => $this->viewService->municipalityOptions($request->user()?->municipality_id),
+            'defaultMunicipality' => $this->viewService->municipality(
                 $municipalityId ?? (int) $project->municipality_id,
             ),
-            'sectors' => $repository->getAllSectorOptions(),
-            'types' => $repository->getTypeOptions(),
-            'statuses' => $repository->getStatusOptions(),
+            'sectors' => $this->viewService->allSectorOptions(),
+            'types' => $this->viewService->typeOptions(),
+            'statuses' => $this->viewService->statusOptions(),
         ]);
     }
 
@@ -219,8 +215,8 @@ class ProjectController extends Controller
         $project = $this->findByIdService->execute($project);
 
         return Inertia::render('admin/projects/create-update', [
-            'project' => $project->load(['sector:id,name', 'municipality:id,name']),
-            'statuses' => app(ProjectRepository::class)->getStatusOptions(),
+            'project' => $this->viewService->loadUpdateFormRelations($project),
+            'statuses' => $this->viewService->statusOptions(),
         ]);
     }
 

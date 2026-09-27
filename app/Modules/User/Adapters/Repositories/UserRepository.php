@@ -3,44 +3,50 @@
 namespace App\Modules\User\Adapters\Repositories;
 
 use App\Core\Repositories\BaseRepository;
+use App\Core\Support\EntitySearchHelper;
+use App\Models\Municipality;
+use App\Models\Sector;
 use App\Models\User as UserModel;
 use App\Modules\User\Domain\Contracts\UserRepositoryPort;
-use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Spatie\QueryBuilder\AllowedFilter;
-use Spatie\QueryBuilder\AllowedInclude;
 use Spatie\QueryBuilder\AllowedSort;
 
+/** @extends BaseRepository<UserModel> */
 class UserRepository extends BaseRepository implements UserRepositoryPort
 {
     public function __construct()
     {
-        parent::__construct(new UserModel);
+        parent::__construct(UserModel::class);
     }
 
     /**
      * Setup User-specific filters, sorts and includes
      * Customize this method to define what can be filtered, sorted, and included
      */
-    protected function setupDefaults(): void
+    protected function getFilters(): array
     {
-        // Define allowed filters for User
-        $this->allowedFilters = [
+        return [
             AllowedFilter::exact('id'),
-            AllowedFilter::partial('name'), // Example: partial search on name
-            AllowedFilter::exact('status'),
+            AllowedFilter::partial('name'),
+            AllowedFilter::callback('search', fn ($query, $value) => EntitySearchHelper::apply(
+                $query,
+                $value,
+                ['columns' => ['name', 'email', 'phone']],
+            )),
+            AllowedFilter::callback('status', function ($query, mixed $value): void {
+                $value === 'inactive' ? $query->whereNotNull('deleted_at') : $query->whereNull('deleted_at');
+            }),
             AllowedFilter::exact('municipality_id'),
             AllowedFilter::exact('sector_id'),
             AllowedFilter::exact('created_at'),
             AllowedFilter::exact('updated_at'),
-            // Add more filters as needed:
-            // AllowedFilter::exact('user_id'),
-            // AllowedFilter::scope('created_after'), // Requires scope in model
-            // AllowedFilter::scope('active'), // Requires scope in model
         ];
+    }
 
-        // Define allowed sorts for User
-        $this->allowedSorts = [
+    protected function getSorts(): array
+    {
+        return [
             AllowedSort::field('id'),
             AllowedSort::field('name'),
             AllowedSort::field('status'),
@@ -48,49 +54,15 @@ class UserRepository extends BaseRepository implements UserRepositoryPort
             AllowedSort::field('sector_id'),
             AllowedSort::field('created_at'),
             AllowedSort::field('updated_at'),
-            // Add more sorts as needed:
-            // AllowedSort::field('user_id'),
         ];
+    }
 
-        // Define allowed includes (relationships) for User
-        $this->allowedIncludes = [
-            AllowedInclude::relationship('municipality'),
-            AllowedInclude::relationship('sector'),
+    protected function getWith(): array
+    {
+        return [
+            'municipality',
+            'sector',
         ];
-
-        // Set default sort
-        $this->defaultSort = '-created_at';
-    }
-
-    /**
-     * @param  array<int, string>  $with
-     * @return LengthAwarePaginator<int, UserModel>
-     */
-    public function getAll(int $perPage, ?string $defaultSort = null, array $with = []): LengthAwarePaginator
-    {
-        // Spatie Query Builder will automatically handle:
-        // - Filtering: GET /users?filter[name]=example&filter[status]=active
-        // - Sorting: GET /users?sort=-created_at,name
-        // - Including: GET /users?include=user,category
-        // - Combining: GET /users?filter[status]=active&sort=-created_at&include=user
-
-        return parent::getAll($perPage, $defaultSort, $with);
-    }
-
-    /**
-     * @param  array<string, mixed>  $data
-     */
-    public function create(array $data): UserModel
-    {
-        return UserModel::create($data)->load($this->includeNames());
-    }
-
-    /**
-     * @param  int|string  $id
-     */
-    public function findById($id): UserModel
-    {
-        return UserModel::with($this->includeNames())->findOrFail($id);
     }
 
     /**
@@ -98,15 +70,12 @@ class UserRepository extends BaseRepository implements UserRepositoryPort
      */
     public function getForMap(?int $municipalityId = null, bool $fallbackToAll = false): EloquentCollection
     {
-        $query = UserModel::query()
+        $users = $this->query(array_filter([
+            'municipality_id' => $municipalityId,
+        ], fn (mixed $value): bool => $value !== null))
             ->whereNull('deleted_at')
-            ->orderBy('name');
-
-        if ($municipalityId) {
-            $query->where('municipality_id', $municipalityId);
-        }
-
-        $users = $query->get(['id', 'name', 'municipality_id', 'sector_id']);
+            ->orderBy('name')
+            ->get(['id', 'name', 'municipality_id', 'sector_id']);
 
         if (! $fallbackToAll || $users->isNotEmpty() || ! $municipalityId) {
             return $users;
@@ -116,5 +85,30 @@ class UserRepository extends BaseRepository implements UserRepositoryPort
             ->whereNull('deleted_at')
             ->orderBy('name')
             ->get(['id', 'name', 'municipality_id', 'sector_id']);
+    }
+
+    public function getManagementData(?string $search, string $status): array
+    {
+        return [
+            'users' => $this->getAll(
+                15,
+                '-id',
+                [
+                    'municipality' => fn ($query) => $query->withTrashed(),
+                    'sector' => fn ($query) => $query->withTrashed(),
+                ],
+                compact('search', 'status'),
+            ),
+            'municipalities' => Municipality::query()->whereNull('deleted_at')->orderBy('name')->get(['id', 'name']),
+            'sectors' => Sector::query()->whereNull('deleted_at')->orderBy('name')->get(['id', 'municipality_id', 'name']),
+        ];
+    }
+
+    public function inspectorBelongsToMunicipality(int $inspectorId, int $municipalityId): bool
+    {
+        return UserModel::query()
+            ->where('id', $inspectorId)
+            ->where('municipality_id', $municipalityId)
+            ->exists();
     }
 }

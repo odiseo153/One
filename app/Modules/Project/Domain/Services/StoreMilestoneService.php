@@ -15,10 +15,8 @@ class StoreMilestoneService
     {
         $project = $this->repository->findById($projectId);
 
-        ProjectMilestone::create([
-            'project_id' => $project->id,
+        $this->repository->createMilestone($project, [
             'name' => $data['name'],
-            'order' => $project->milestones()->count() + 1,
             'planned_date' => $data['planned_date'] ?? null,
             'status' => ProjectMilestone::STATUS_PENDING,
         ]);

@@ -5,24 +5,27 @@ namespace App\Modules\Business\Adapters\Repositories;
 use App\Core\Repositories\BaseRepository;
 use App\Core\Support\EntitySearchHelper;
 use App\Models\Business as BusinessModel;
+use App\Models\BusinessCategory;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
-use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Spatie\QueryBuilder\AllowedFilter;
-use Spatie\QueryBuilder\AllowedInclude;
 use Spatie\QueryBuilder\AllowedSort;
-use Spatie\QueryBuilder\QueryBuilder;
 
+/** @extends BaseRepository<BusinessModel> */
 class BusinessRepository extends BaseRepository
 {
+    protected string $defaultSort = 'name';
+
     public function __construct()
     {
-        parent::__construct(new BusinessModel);
+        parent::__construct(BusinessModel::class);
     }
 
-    protected function setupDefaults(): void
+    protected function getFilters(): array
     {
-        $this->allowedFilters = [
+        return [
             AllowedFilter::exact('id'),
             AllowedFilter::partial('name'),
             AllowedFilter::partial('category'),
@@ -51,8 +54,11 @@ class BusinessRepository extends BaseRepository
             AllowedFilter::exact('created_at'),
             AllowedFilter::exact('updated_at'),
         ];
+    }
 
-        $this->allowedSorts = [
+    protected function getSorts(): array
+    {
+        return [
             AllowedSort::field('id'),
             AllowedSort::field('name'),
             AllowedSort::field('category'),
@@ -63,14 +69,18 @@ class BusinessRepository extends BaseRepository
             AllowedSort::field('created_at'),
             AllowedSort::field('updated_at'),
         ];
+    }
 
-        $this->allowedIncludes = [
-            AllowedInclude::relationship('sector'),
-            AllowedInclude::relationship('inspector'),
-            AllowedInclude::relationship('municipality'),
+    protected function getWith(): array
+    {
+        return [
+            'sector',
+            'inspector',
+            'municipality',
+            'primaryCiiu',
+            'secondaryCiiu',
+            'employees',
         ];
-
-        $this->defaultSort = 'name';
     }
 
     /**
@@ -78,18 +88,16 @@ class BusinessRepository extends BaseRepository
      */
     public function getForTable(int $perPage = 15): LengthAwarePaginator
     {
-        return QueryBuilder::for(BusinessModel::query())
-            ->allowedFilters(...$this->allowedFilters)
-            ->allowedSorts(...$this->allowedSorts)
-            ->defaultSort('name')
-            ->with([
+        return $this->getAll(
+            $perPage,
+            'name',
+            [
                 'sector:id,name',
                 'municipality:id,name,province_id',
                 'municipality.province:id,name',
                 'inspector:id,name',
-            ])
-            ->paginate(max(1, min($perPage, 100)))
-            ->withQueryString();
+            ],
+        );
     }
 
     /**
@@ -97,40 +105,17 @@ class BusinessRepository extends BaseRepository
      */
     public function getForMap(?int $municipalityId = null, ?int $provinceId = null): EloquentCollection
     {
-        $query = QueryBuilder::for(BusinessModel::query())
-            ->allowedFilters(...$this->allowedFilters)
-            ->allowedSorts(...$this->allowedSorts)
-            ->allowedIncludes(...$this->allowedIncludes)
-            ->defaultSort($this->defaultSort);
+        $query = $this->query(array_filter([
+            'municipality_id' => $municipalityId,
+            'province_id' => $municipalityId ? null : $provinceId,
+        ], fn (mixed $value): bool => $value !== null))->defaultSort('name');
 
-        if ($municipalityId) {
-            $query->where('municipality_id', $municipalityId);
-        } elseif ($provinceId) {
-            $query->whereHas('municipality', fn ($municipality) => $municipality->where('province_id', $provinceId));
-        }
-
-        return $query->with('sector:id,name')->get();
-    }
-
-    /**
-     * @param  array<string, mixed>  $data
-     */
-    public function create(array $data): BusinessModel
-    {
-        return BusinessModel::create($data)->load('sector:id,name');
-    }
-
-    /**
-     * @param  int|string  $id
-     * @param  array<string, mixed>  $data
-     */
-    public function update($id, array $data): BusinessModel
-    {
-        $business = $this->findBusinessById($id);
-        $business->update($data);
-        $business->refresh();
-
-        return $business->load('sector:id,name');
+        return $query->with([
+            'sector:id,name',
+            'primaryCiiu:id,code,name',
+            'secondaryCiiu:id,code,name',
+            'employees:id,business_id,first_name,last_name,document_type,document_number,salary',
+        ])->get();
     }
 
     /**
@@ -147,8 +132,60 @@ class BusinessRepository extends BaseRepository
         ];
     }
 
-    private function findBusinessById(int|string $id): BusinessModel
+    /**
+     * @return array<int, array{id: int, code: string, name: string}>
+     */
+    public function getCategories(): array
     {
-        return BusinessModel::with('sector:id,name')->findOrFail($id);
+        return BusinessCategory::query()
+            ->orderBy('code')
+            ->get(['id', 'code', 'name'])
+            ->map(fn (BusinessCategory $category): array => [
+                'id' => $category->id,
+                'code' => $category->code,
+                'name' => $category->name,
+            ])
+            ->all();
+    }
+
+    /**
+     * @return EloquentCollection<int, BusinessModel>
+     */
+    public function getForMatching(?int $municipalityId, ?int $sectorId): EloquentCollection
+    {
+        return BusinessModel::query()
+            ->with('sector:id,name')
+            ->when($sectorId, fn ($query) => $query->where('sector_id', $sectorId))
+            ->when(! $sectorId && $municipalityId, fn ($query) => $query->where('municipality_id', $municipalityId))
+            ->get();
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @param  array<int, array<string, mixed>>  $employees
+     */
+    public function createWithEmployees(array $data, array $employees): BusinessModel
+    {
+        return DB::transaction(function () use ($data, $employees): BusinessModel {
+            $business = $this->create($data);
+            $business->employees()->createMany($employees);
+
+            return $business->load('employees');
+        });
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @param  array<int, array<string, mixed>>  $employees
+     */
+    public function updateWithEmployees(int $businessId, array $data, array $employees): BusinessModel
+    {
+        return DB::transaction(function () use ($businessId, $data, $employees): BusinessModel {
+            $business = $this->update($businessId, $data);
+            $business->employees()->delete();
+            $business->employees()->createMany($employees);
+
+            return $business->load('employees');
+        });
     }
 }

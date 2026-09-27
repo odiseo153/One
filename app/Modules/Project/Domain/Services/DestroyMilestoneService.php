@@ -2,7 +2,6 @@
 
 namespace App\Modules\Project\Domain\Services;
 
-use App\Models\ProjectMilestone;
 use App\Modules\Project\Adapters\Repositories\ProjectRepository;
 
 class DestroyMilestoneService
@@ -15,9 +14,6 @@ class DestroyMilestoneService
     {
         $project = $this->repository->findById($projectId);
 
-        ProjectMilestone::query()
-            ->where('project_id', $project->id)
-            ->findOrFail($milestoneId)
-            ->delete();
+        $this->repository->deleteMilestone($project->id, $milestoneId);
     }
 }

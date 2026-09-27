@@ -46,7 +46,7 @@ class ProjectPhoto extends Model
     /**
      * @return BelongsTo<ProjectUpdate, $this>
      */
-    public function update(): BelongsTo
+    public function ProjectUpdate(): BelongsTo
     {
         return $this->belongsTo(ProjectUpdate::class, 'project_update_id');
     }

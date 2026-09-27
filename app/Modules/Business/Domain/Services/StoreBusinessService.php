@@ -3,13 +3,19 @@
 namespace App\Modules\Business\Domain\Services;
 
 use App\Models\Business;
-use App\Models\Sector;
-use App\Models\User;
 use App\Modules\Business\Adapters\Repositories\BusinessRepository;
+use App\Modules\Sector\Adapters\Repositories\SectorRepository;
+use App\Modules\User\Adapters\Repositories\UserRepository;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 
 class StoreBusinessService
 {
-    public function __construct(private readonly BusinessRepository $repository) {}
+    public function __construct(
+        private readonly BusinessRepository $repository,
+        private readonly SectorRepository $sectorRepository,
+        private readonly UserRepository $userRepository,
+    ) {}
 
     /**
      * @param  array<string, mixed>  $data
@@ -23,12 +29,21 @@ class StoreBusinessService
         );
 
         $data['municipality_id'] = $municipalityId;
-        $data['detected_at'] = $data['detected_at'] ?: now()->toDateString();
+        $data['detected_at'] = ($data['detected_at'] ?? null) ?: now()->toDateString();
 
         $this->ensureSectorBelongsToMunicipality($data['sector_id'] ?? null, $municipalityId);
         $this->ensureInspectorBelongsToMunicipality($data['inspector_id'] ?? null, $municipalityId);
 
-        return $this->repository->create($data);
+        $employees = $data['employees'] ?? [];
+        $photo = $data['photo'] ?? null;
+        unset($data['employees'], $data['photo'], $data['is_registered']);
+
+        if ($photo instanceof UploadedFile) {
+            $path = $photo->store('businesses', 'public');
+            $data['photo_url'] = $path ? Storage::url($path) : null;
+        }
+
+        return $this->repository->createWithEmployees($data, $employees);
     }
 
     private function ensureUserCanUseSector(mixed $sectorId, ?int $userSectorId): void
@@ -48,20 +63,16 @@ class StoreBusinessService
             return $municipalityId;
         }
 
-        $sector = Sector::query()
-            ->where('id', $sectorId)
-            ->firstOrFail(['id', 'municipality_id']);
+        $sectorMunicipalityId = $this->sectorRepository->municipalityId((int) $sectorId);
+        abort_unless($sectorMunicipalityId !== null, 404);
 
         if (! $municipalityId) {
-            return $sector->municipality_id;
+            return $sectorMunicipalityId;
         }
 
-        $hasOwnSectors = Sector::query()
-            ->where('municipality_id', $municipalityId)
-            ->whereNull('deleted_at')
-            ->exists();
+        $hasOwnSectors = $this->sectorRepository->municipalityHasSectors($municipalityId);
 
-        return $hasOwnSectors ? $municipalityId : $sector->municipality_id;
+        return $hasOwnSectors ? $municipalityId : $sectorMunicipalityId;
     }
 
     private function ensureSectorBelongsToMunicipality(mixed $sectorId, int $municipalityId): void
@@ -71,10 +82,7 @@ class StoreBusinessService
         }
 
         abort_unless(
-            Sector::query()
-                ->where('id', $sectorId)
-                ->where('municipality_id', $municipalityId)
-                ->exists(),
+            $this->sectorRepository->belongsToMunicipality((int) $sectorId, $municipalityId),
             422,
         );
     }
@@ -86,10 +94,7 @@ class StoreBusinessService
         }
 
         abort_unless(
-            User::query()
-                ->where('id', $inspectorId)
-                ->where('municipality_id', $municipalityId)
-                ->exists(),
+            $this->userRepository->inspectorBelongsToMunicipality((int) $inspectorId, $municipalityId),
             422,
         );
     }

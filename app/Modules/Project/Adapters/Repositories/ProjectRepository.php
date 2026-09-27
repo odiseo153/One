@@ -3,41 +3,74 @@
 namespace App\Modules\Project\Adapters\Repositories;
 
 use App\Core\Repositories\BaseRepository;
+use App\Core\Support\EntityDateHelper;
+use App\Core\Support\EntitySearchHelper;
 use App\Models\Municipality;
 use App\Models\Project as ProjectModel;
+use App\Models\ProjectMilestone;
+use App\Models\ProjectPhoto;
+use App\Models\ProjectUpdate;
 use App\Models\ProjectUser;
 use App\Models\Sector;
 use App\Models\User;
 use App\Modules\Project\Domain\Contracts\ProjectRepositoryPort;
-use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Support\Collection;
 use Spatie\QueryBuilder\AllowedFilter;
-use Spatie\QueryBuilder\AllowedInclude;
 use Spatie\QueryBuilder\AllowedSort;
 
+/** @extends BaseRepository<ProjectModel> */
 class ProjectRepository extends BaseRepository implements ProjectRepositoryPort
 {
+    protected string $defaultSort = '-id';
+
     public function __construct()
     {
-        parent::__construct(new ProjectModel);
+        parent::__construct(ProjectModel::class);
     }
 
-    protected function setupDefaults(): void
+    protected function getFilters(): array
     {
-        $this->allowedFilters = [
+        return [
             AllowedFilter::exact('id'),
             AllowedFilter::partial('name'),
+            AllowedFilter::callback('search', fn ($query, $value) => EntitySearchHelper::apply(
+                $query,
+                $value,
+                [
+                    'columns' => ['name', 'contractor_name', 'address_text'],
+                    'relations' => ['sector' => ['name'], 'municipality' => ['name']],
+                ],
+            )),
             AllowedFilter::partial('contractor_name'),
             AllowedFilter::partial('address_text'),
             AllowedFilter::exact('status'),
             AllowedFilter::exact('type'),
             AllowedFilter::exact('sector_id'),
             AllowedFilter::exact('municipality_id'),
+            AllowedFilter::callback('province_id', fn ($query, $value) => $query->whereHas(
+                'municipality',
+                fn ($municipality) => $municipality->where('province_id', $value),
+            )),
             AllowedFilter::exact('created_by'),
-            AllowedFilter::callback('from', fn ($query, $value) => $query->whereDate('start_date_planned', '>=', $value)),
-            AllowedFilter::callback('to', fn ($query, $value) => $query->whereDate('end_date_planned', '<=', $value)),
+            AllowedFilter::callback('from', fn ($query, $value) => EntityDateHelper::applyFrom(
+                $query,
+                $value,
+                'start_date_planned',
+                false,
+            )),
+            AllowedFilter::callback('to', fn ($query, $value) => EntityDateHelper::applyTo(
+                $query,
+                $value,
+                'end_date_planned',
+                false,
+            )),
         ];
+    }
 
-        $this->allowedSorts = [
+    protected function getSorts(): array
+    {
+        return [
             AllowedSort::field('id'),
             AllowedSort::field('name'),
             AllowedSort::field('status'),
@@ -50,36 +83,25 @@ class ProjectRepository extends BaseRepository implements ProjectRepositoryPort
             AllowedSort::field('created_at'),
             AllowedSort::field('updated_at'),
         ];
+    }
 
-        $this->allowedIncludes = [
-            AllowedInclude::relationship('municipality'),
-            AllowedInclude::relationship('sector'),
-            AllowedInclude::relationship('creator'),
-            AllowedInclude::relationship('projectUsers.user'),
-            AllowedInclude::relationship('updates.user'),
-            AllowedInclude::relationship('updates.photos'),
-            AllowedInclude::relationship('photos.uploader'),
-            AllowedInclude::relationship('milestones'),
+    protected function getWith(): array
+    {
+        return [
+            'municipality',
+            'sector',
+            'creator',
+            'projectUsers.user',
+            'updates.user',
+            'updates.photos',
+            'photos.uploader',
+            'milestones',
         ];
-
-        $this->allowedCounts = ['updates'];
-
-        $this->defaultSort = '-id';
     }
 
-    public function getAll(int $perPage, ?string $defaultSort = null, array $with = []): LengthAwarePaginator
+    protected function getCounts(): array
     {
-        return parent::getAll($perPage, $defaultSort, $with);
-    }
-
-    public function create(array $data): ProjectModel
-    {
-        return ProjectModel::create($data)->load($this->includeNames());
-    }
-
-    public function findById($id): ProjectModel
-    {
-        return ProjectModel::with($this->includeNames())->findOrFail($id);
+        return ['updates'];
     }
 
     public function getStats(?int $municipalityId): array
@@ -212,5 +234,130 @@ class ProjectRepository extends BaseRepository implements ProjectRepositoryPort
         return collect(ProjectUser::ROLES)
             ->map(fn (string $role) => ['value' => $role, 'label' => ProjectUser::roleLabelFor($role)])
             ->all();
+    }
+
+    /**
+     * @return EloquentCollection<int, ProjectModel>
+     */
+    public function getMarkers(?int $municipalityId, ?int $provinceId): EloquentCollection
+    {
+        return $this->query(array_filter([
+            'municipality_id' => $municipalityId,
+            'province_id' => $municipalityId ? null : $provinceId,
+        ], fn (mixed $value): bool => $value !== null))
+            ->with(['sector:id,name', 'municipality:id,name'])
+            ->whereNull('projects.deleted_at')
+            ->orderBy('projects.name')
+            ->limit(500)
+            ->get();
+    }
+
+    /**
+     * @return EloquentCollection<int, ProjectModel>
+     */
+    public function getReportProjects(?int $municipalityId): EloquentCollection
+    {
+        return ProjectModel::query()
+            ->with(['sector:id,name'])
+            ->when($municipalityId, fn ($query, $id) => $query->where('municipality_id', $id))
+            ->get();
+    }
+
+    /**
+     * @return Collection<string, string>
+     */
+    public function getLastUpdateDates(): Collection
+    {
+        return ProjectUpdate::query()
+            ->selectRaw('project_id, MAX(update_date) as last_date')
+            ->groupBy('project_id')
+            ->pluck('last_date', 'project_id');
+    }
+
+    /**
+     * @return Collection<int|string, Collection<int, User>>
+     */
+    public function getManagersByProject(): Collection
+    {
+        $rows = ProjectUser::query()
+            ->where('role_in_project', ProjectUser::ROLE_MANAGER)
+            ->with('user:id,name')
+            ->get();
+
+        return $rows->groupBy('project_id')->map(
+            fn (EloquentCollection $projectRows): Collection => $projectRows
+                ->map(fn (ProjectUser $row): ?User => $row->user)
+                ->filter(fn (?User $user): bool => $user !== null)
+                ->values(),
+        );
+    }
+
+    public function loadUpdateFormRelations(ProjectModel $project): ProjectModel
+    {
+        return $project->load(['sector:id,name', 'municipality:id,name']);
+    }
+
+    public function saveProject(ProjectModel $project): void
+    {
+        $project->save();
+    }
+
+    public function changeStatus(ProjectModel $project, string $status, ?int $userId, ?string $note): ProjectModel
+    {
+        return $project->changeStatus($status, $userId, $note);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function createUpdate(array $data): ProjectUpdate
+    {
+        return ProjectUpdate::create($data);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function createPhoto(array $data): ProjectPhoto
+    {
+        return ProjectPhoto::create($data);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function createMilestone(ProjectModel $project, array $data): ProjectMilestone
+    {
+        return ProjectMilestone::create([
+            ...$data,
+            'project_id' => $project->id,
+            'order' => $project->milestones()->count() + 1,
+        ]);
+    }
+
+    public function deleteMilestone(int $projectId, int $milestoneId): void
+    {
+        ProjectMilestone::query()
+            ->where('project_id', $projectId)
+            ->findOrFail($milestoneId)
+            ->delete();
+    }
+
+    public function updateMilestoneStatus(int $projectId, int $milestoneId, string $status): void
+    {
+        $milestone = ProjectMilestone::query()
+            ->where('project_id', $projectId)
+            ->findOrFail($milestoneId);
+
+        if ($status === ProjectMilestone::STATUS_COMPLETED) {
+            $milestone->markCompleted();
+
+            return;
+        }
+
+        $milestone->update([
+            'status' => $status,
+            'completed_date' => null,
+        ]);
     }
 }

@@ -29,13 +29,12 @@ class UpdateProjectStatusService
             abort(422, __('El estado seleccionado no es válido para esta obra.'));
         }
 
-        $project->changeStatus(
+        return $this->repository->changeStatus(
+            $project,
             $data['status'],
             $userId,
             $data['note'] ?? null,
         );
-
-        return $project;
     }
 
     public static function getAllowedTransitions(string $currentStatus): array

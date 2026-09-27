@@ -3,8 +3,6 @@
 namespace App\Modules\Project\Domain\Services;
 
 use App\Models\Project;
-use App\Models\ProjectPhoto;
-use App\Models\ProjectUpdate;
 use App\Modules\Project\Adapters\Repositories\ProjectRepository;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -44,9 +42,9 @@ class StoreUpdateService
             }
         }
 
-        $project->save();
+        $this->repository->saveProject($project);
 
-        $update = ProjectUpdate::create([
+        $update = $this->repository->createUpdate([
             'project_id' => $project->id,
             'user_id' => $userId,
             'update_date' => $data['update_date'],
@@ -67,7 +65,7 @@ class StoreUpdateService
                 continue;
             }
 
-            ProjectPhoto::create([
+            $this->repository->createPhoto([
                 'project_id' => $project->id,
                 'project_update_id' => $update->id,
                 'photo_url' => Storage::url($path),

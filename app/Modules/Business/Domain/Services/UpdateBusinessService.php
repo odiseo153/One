@@ -3,13 +3,20 @@
 namespace App\Modules\Business\Domain\Services;
 
 use App\Models\Business;
-use App\Models\Sector;
-use App\Models\User;
 use App\Modules\Business\Adapters\Repositories\BusinessRepository;
+use App\Modules\Sector\Adapters\Repositories\SectorRepository;
+use App\Modules\User\Adapters\Repositories\UserRepository;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class UpdateBusinessService
 {
-    public function __construct(private readonly BusinessRepository $repository) {}
+    public function __construct(
+        private readonly BusinessRepository $repository,
+        private readonly SectorRepository $sectorRepository,
+        private readonly UserRepository $userRepository,
+    ) {}
 
     /**
      * @param  array<string, mixed>  $data
@@ -23,7 +30,24 @@ class UpdateBusinessService
         $this->ensureSectorBelongsToMunicipality($data['sector_id'] ?? null, $business->municipality_id);
         $this->ensureInspectorBelongsToMunicipality($data['inspector_id'] ?? null, $business->municipality_id);
 
-        return $this->repository->update($business->id, $data);
+        $employees = $data['employees'] ?? [];
+        $photo = $data['photo'] ?? null;
+        unset($data['employees'], $data['photo'], $data['is_registered']);
+
+        $previousPhotoUrl = $business->photo_url;
+
+        if ($photo instanceof UploadedFile) {
+            $path = $photo->store('businesses', 'public');
+            $data['photo_url'] = $path ? Storage::url($path) : null;
+        }
+
+        $updated = $this->repository->updateWithEmployees($business->id, $data, $employees);
+
+        if ($photo instanceof UploadedFile && $previousPhotoUrl) {
+            Storage::disk('public')->delete(Str::after($previousPhotoUrl, '/storage/'));
+        }
+
+        return $updated;
     }
 
     private function ensureUserCanUseSector(mixed $sectorId, ?int $userSectorId): void
@@ -42,10 +66,7 @@ class UpdateBusinessService
         }
 
         abort_unless(
-            Sector::query()
-                ->where('id', $sectorId)
-                ->where('municipality_id', $municipalityId)
-                ->exists(),
+            $this->sectorRepository->belongsToMunicipality((int) $sectorId, $municipalityId),
             422,
         );
     }
@@ -57,10 +78,7 @@ class UpdateBusinessService
         }
 
         abort_unless(
-            User::query()
-                ->where('id', $inspectorId)
-                ->where('municipality_id', $municipalityId)
-                ->exists(),
+            $this->userRepository->inspectorBelongsToMunicipality((int) $inspectorId, $municipalityId),
             422,
         );
     }

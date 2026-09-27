@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\Municipality;
+use App\Modules\Municipality\Domain\Services\MunicipalityOptionsService;
 use App\Modules\Project\Domain\Services\ProjectReportService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
@@ -18,6 +18,7 @@ class ProjectReportController extends Controller
 {
     public function __construct(
         private readonly ProjectReportService $reportService,
+        private readonly MunicipalityOptionsService $municipalityOptionsService,
     ) {}
 
     public function index(Request $request): Response
@@ -178,17 +179,10 @@ class ProjectReportController extends Controller
     private function municipalityOptions(Request $request): array
     {
         if ($request->user()?->municipality_id) {
-            return Municipality::query()
-                ->where('id', $request->user()->municipality_id)
-                ->get(['id', 'name'])
-                ->toArray();
+            return $this->municipalityOptionsService->options((int) $request->user()->municipality_id);
         }
 
-        return Municipality::query()
-            ->whereNull('deleted_at')
-            ->orderBy('name')
-            ->get(['id', 'name'])
-            ->toArray();
+        return $this->municipalityOptionsService->options();
     }
 
     /**
@@ -200,6 +194,6 @@ class ProjectReportController extends Controller
             return null;
         }
 
-        return Municipality::query()->find($municipalityId, ['id', 'name'])?->toArray();
+        return $this->municipalityOptionsService->find($municipalityId);
     }
 }

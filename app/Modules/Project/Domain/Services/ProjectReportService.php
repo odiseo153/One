@@ -3,15 +3,16 @@
 namespace App\Modules\Project\Domain\Services;
 
 use App\Models\Project;
-use App\Models\ProjectUpdate;
-use App\Models\ProjectUser;
 use App\Models\User;
+use App\Modules\Project\Adapters\Repositories\ProjectRepository;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
 class ProjectReportService
 {
     public const DEFAULT_STAGNANT_DAYS = 30;
+
+    public function __construct(private readonly ProjectRepository $repository) {}
 
     /**
      * @param  array{from?: ?string, to?: ?string, stagnant_days?: ?int}  $filters
@@ -457,10 +458,7 @@ class ProjectReportService
      */
     private function baseProjects(?int $municipalityId): Collection
     {
-        return Project::query()
-            ->with(['sector:id,name'])
-            ->when($municipalityId, fn ($q, $id) => $q->where('municipality_id', $id))
-            ->get();
+        return $this->repository->getReportProjects($municipalityId);
     }
 
     private function inPeriod(Project $project, ?string $from, ?string $to): bool
@@ -498,23 +496,15 @@ class ProjectReportService
      */
     private function lastUpdateDates(): Collection
     {
-        return ProjectUpdate::query()
-            ->selectRaw('project_id, MAX(update_date) as last_date')
-            ->groupBy('project_id')
-            ->pluck('last_date', 'project_id');
+        return $this->repository->getLastUpdateDates();
     }
 
     /**
-     * @return Collection<int, Collection<int, User>>
+     * @return Collection<int|string, Collection<int, User>>
      */
     private function managerByProject(): Collection
     {
-        $rows = ProjectUser::query()
-            ->where('role_in_project', ProjectUser::ROLE_MANAGER)
-            ->with('user:id,name')
-            ->get();
-
-        return $rows->groupBy('project_id')->map(fn (Collection $rows) => $rows->map(fn ($row) => $row->user));
+        return $this->repository->getManagersByProject();
     }
 
     private function fmtDate(?Carbon $date): string

@@ -6,13 +6,29 @@ use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 
 interface BaseRepositoryPort
 {
-    public function create(array $data);
+    /** @param array<string, mixed> $data */
+    public function create(array $data): mixed;
 
-    public function getAll(int $perPage): LengthAwarePaginator;
+    /**
+     * @param  array<int|string, mixed>  $with
+     * @param  array<string, mixed>  $parameters
+     * @return LengthAwarePaginator<int, mixed>
+     */
+    public function getAll(
+        int $perPage = 15,
+        ?string $defaultSort = null,
+        array $with = [],
+        array $parameters = [],
+    ): LengthAwarePaginator;
 
-    public function findById($id);
+    public function findById(int|string $id): mixed;
 
-    public function update($id, array $data);
+    /** @param array<string, mixed> $data */
+    public function update(int|string $id, array $data): mixed;
 
-    public function delete($id);
+    public function delete(int|string $id): bool;
+
+    public function restore(int|string $id): bool;
+
+    public function forceDelete(int|string $id): bool;
 }
